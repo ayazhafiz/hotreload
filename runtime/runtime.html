@@ -1,0 +1,50 @@
+<html>
+  <head>
+    <title>Hot-Reload Runtime</title>
+    <style>
+      #app {
+        font-size: 50px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="app"></div>
+
+    <script>
+      // Dummy object to allow export of the runtime.
+      // In practice this should never be permitted, just use a bundler or
+      // something.
+      const exports = {};
+      const πHOST = "<%= host %>";
+      const πPORT = "<%= port %>";
+      const πHR_ROUTE = `ws://${πHOST}:${πPORT}/hotreload`;
+
+      let _π_reload_id = 0;
+      const _π_resolve_reload = {};
+      async function πhotreload(script) {
+        const s = document.createElement('script');
+        const reload_id = _π_reload_id++;
+
+        const wait_hotreload = new Promise((resolve) => {
+          _π_resolve_reload[reload_id] = resolve;
+        });
+        s.innerHTML = [
+          script,
+          `_π_resolve_reload[${reload_id}]();`,
+        ].join('\n');
+
+        document.body.appendChild(s);
+        await wait_hotreload;
+        document.body.removeChild(s);
+      }
+
+      const πrecv = new WebSocket(πHR_ROUTE);
+      πrecv.onmessage = function (event) {
+        πhotreload(event.data);
+      };
+
+      <%- program %>
+    </script>
+  </body>
+</html>

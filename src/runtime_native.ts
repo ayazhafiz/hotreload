@@ -157,12 +157,20 @@ function reconcileChangedHotReloadable(
 }
 
 export async function start(
-    inputProgramFile: string, codegen: CppCodeGenerator,
-    showGenerated: boolean): Promise<never> {
+    inputProgramFile: string,
+    codegen: CppCodeGenerator,
+    showGenerated: boolean,
+    ): Promise<never> {
   // We are going to dealloc a lot of temporary resource when the runtime
   // terminates by way of .on('exit') listeners. This could be more efficient,
   // but let's just bump it up.
   process.setMaxListeners(128);
+
+  // The TS program to perform rebuilds on top of.
+  // This permits us to have relatively-fast rebuilds of the input program when
+  // it changes, and we update the reference everytime a rebuild completes
+  // successfully.
+  let cachedTsProgram = codegen.tsProgram;
 
   const hotReloads: RegisteredHotReloadFunction[] = [];
   const hotReloadCodeDefs: CppCode[] = [];
@@ -230,9 +238,11 @@ export async function start(
         // 1. parse the program file and extract its new C++ definitions
         const newHotReloads = new Map<string, HotReloadFunction>();
         try {
-          for (const hr of compileNative(inputProgramFile).hotReload) {
+          const newProgram = compileNative(inputProgramFile, cachedTsProgram);
+          for (const hr of newProgram.hotReload) {
             newHotReloads.set(hr.name, hr);
           }
+          cachedTsProgram = newProgram.tsProgram;
         } catch (e) {
           error(e.message);
           warn(`Continuing as if the program has not changed.`);
@@ -245,7 +255,7 @@ export async function start(
       default:
         error(`Unknown file change event "${event}"`);
     }
-  })
+  });
 
   // Finally, we start the user program.
   info(`[${++taskNo}/${numTasks}] Starting user program...`);
@@ -259,7 +269,6 @@ export async function start(
   let mainIsFinished = false;
   return new Promise<never>(() => {
     main.on('exit', (code, signal) => {
-      console.log('bye');
       mainIsFinished = true;
       if (signal) {
         console.log(`<exited by ${signal}>`);

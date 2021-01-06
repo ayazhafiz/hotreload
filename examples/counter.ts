@@ -1,3 +1,5 @@
+import {hotreload, HotReloadProgram} from '../runtime/runtime';
+
 class Counter extends HotReloadProgram {
   @hotreload
   scale(a: number): number {
@@ -9,11 +11,11 @@ class Counter extends HotReloadProgram {
     return a + 0;
   }
 
-  main(): number {
+  async main(): Promise<number> {
     for (let i = 0;; ++i) {
       let n = this.shift(this.scale(i));
       this.print(n);
-      this.sleep_seconds(1);
+      await this.sleep_seconds(1);
     }
   }
 }

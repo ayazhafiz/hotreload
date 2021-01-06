@@ -1,7 +1,8 @@
 import * as path from 'path';
 import * as yargs from 'yargs';
 
-import {compileNative} from './compile';
+import * as comp from './compile';
+import * as rt_browser from './runtime_browser';
 import * as rt_native from './runtime_native';
 import {die} from './util';
 
@@ -44,9 +45,9 @@ async function main() {
   const {backend, file, showGenerated} = getOptions();
   switch (backend) {
     case 'native': {
-      let codegen;
+      let codegen: comp.CppCodeGenerator;
       try {
-        codegen = compileNative(file);
+        codegen = comp.compileNative(file);
       } catch (e) {
         // We cannot recover if first-pass compilation failed.
         die(e.message);
@@ -54,8 +55,16 @@ async function main() {
       // The runtime will handle errors gracefully and clean up after itself.
       return rt_native.start(file, codegen, showGenerated);
     }
-    case 'browser':
-      throw new Error('Not yet implemented');
+    case 'browser': {
+      let codegen: comp.JsCodeGenerator;
+      try {
+        codegen = comp.compileBrowser(file);
+      } catch (e) {
+        // We cannot recover if first-pass compilation failed.
+        die(e.message);
+      }
+      return rt_browser.start(file, codegen, showGenerated);
+    }
   }
 }
 

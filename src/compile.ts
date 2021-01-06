@@ -1,9 +1,12 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import * as ts from 'typescript';
+
 import {fatal} from './util';
 
-const RUNTIME_DEFS = 'runtime/runtime.d.ts';
-const RUNTIME_BASE = 'HotReloadProgram';
+const TS_CONFIG = path.resolve('runtime/tsconfig.json');
+const RUNTIME_TS = path.resolve('runtime/runtime.ts');
+const RUNTIME_BASECLASS_NAME = 'HotReloadProgram';
 const HOTRELOAD = 'hotreload';
 
 const FmtDiagHost: ts.FormatDiagnosticsHost = {
@@ -18,21 +21,62 @@ const FmtDiagHost: ts.FormatDiagnosticsHost = {
   }
 };
 
-function getRuntimeProgram(file: string): ts.ClassDeclaration {
-  const compilerOptions: ts.CompilerOptions = {
-    experimentalDecorators: true,
+const ParseConfigHost: ts.ParseConfigHost = {
+  useCaseSensitiveFileNames: true,
+  readDirectory(rootDir: string): readonly string[] {
+    return fs.readdirSync(rootDir);
+  },
+  fileExists(path: string): boolean {
+    return fs.existsSync(path);
+  },
+  readFile(path: string) {
+    return fs.readFileSync(path).toString();
+  },
+};
+
+const ConfigFile = ts.readJsonConfigFile(TS_CONFIG, ParseConfigHost.readFile);
+const CompilerOptions = ts.parseJsonSourceFileConfigFileContent(
+                              ConfigFile, ParseConfigHost, 'runtime')
+                            .options;
+const CompilerHost =
+    ts.createCompilerHost(CompilerOptions, /* setParentNodes */ true);
+
+function createProgram(inFiles: string[], oldProgram?: ts.Program): ts.Program {
+  CompilerHost.fileExists = (fileName: string) => {
+    // Avoid superfuous module resolution + type checking
+    return inFiles.includes(fileName);
   };
-  const host =
-      ts.createCompilerHost(compilerOptions, /* setParentNodes */ true);
-  host.getDefaultLibFileName = () => RUNTIME_DEFS;
-  const totalProgram = ts.createProgram([file], compilerOptions, host);
+  const totalProgram =
+      ts.createProgram(inFiles, CompilerOptions, CompilerHost, oldProgram);
 
   const diagnostics = totalProgram.getSemanticDiagnostics();
   if (diagnostics.length !== 0) {
     fatal(ts.formatDiagnostics(diagnostics, FmtDiagHost));
   }
-  const sf = totalProgram.getSourceFile(file);
-  if (!sf) fatal(`no source file for ${file}`);
+  return totalProgram;
+}
+
+type NamedClassDeclaration = ts.ClassDeclaration&{name: ts.Identifier};
+
+function isNamedClassDeclaration(n: ts.Node): n is NamedClassDeclaration {
+  return ts.isClassDeclaration(n) && n.name !== undefined &&
+      ts.isIdentifier(n.name);
+}
+
+type ProgramFunction = ts.FunctionDeclaration&{
+  name: ts.Identifier;
+  body: ts.Block;
+}
+
+function isProgramFunction(node: ts.Node): node is ProgramFunction {
+  return ts.isFunctionDeclaration(node) && node.name !== undefined &&
+      ts.isIdentifier(node.name) && node.body !== undefined;
+}
+
+function findUserProgram(
+    inFile: string, tsProgram: ts.Program): NamedClassDeclaration {
+  const sf = tsProgram.getSourceFile(inFile);
+  if (!sf) fatal(`No source file for "${inFile}"`);
 
   const sfC = sf.getChildren();
   // I guess the TS AST looks like
@@ -45,74 +89,23 @@ function getRuntimeProgram(file: string): ts.ClassDeclaration {
   // SyntaxList, read the first statement of that.
   const stmts =
       sfC[0].kind === ts.SyntaxKind.SyntaxList ? sfC[0].getChildren() : sfC;
-  if (stmts[stmts.length - 1].kind === ts.SyntaxKind.EndOfFileToken) {
-    stmts.pop();
+  function isProgram(cls: ts.Node): cls is NamedClassDeclaration {
+    if (!isNamedClassDeclaration(cls)) return false;
+    if (!cls.heritageClauses) return false;
+    const extendsBase = cls.heritageClauses.some(
+        c => c.types.some(
+            t => ts.isIdentifier(t.expression) &&
+                t.expression.text === RUNTIME_BASECLASS_NAME));
+    return extendsBase;
   }
-  if (stmts.length !== 1) {
-    fatal(`expected exactly one top level statement, found ${
-        stmts.map(s => s.getText())}`);
-  }
-  const [cls] = stmts;
-  if (!ts.isClassDeclaration(cls)) {
-    fatal(`${cls.getText()} must be a class`);
-  }
-  if (cls.heritageClauses?.length !== 1 ||
-      cls.heritageClauses[0].types.find(
-          sup => ts.isIdentifier(sup.expression) &&
-              sup.expression.text === RUNTIME_BASE) === undefined) {
-    fatal(`program must extend from, and only from, "${RUNTIME_BASE}"`);
-  }
-  return cls;
-}
+  const programs = stmts.filter(isProgram);
 
-/** Rewrites "this.doFoo()" -> "doFoo" */
-function RW_RemoveThis<T extends ts.Node>(context: ts.TransformationContext) {
-  return (root: T) => {
-    function visit(node: ts.Node): ts.Node {
-      node = ts.visitEachChild(node, visit, context);
-      if (ts.isPropertyAccessExpression(node) &&
-          node.expression.kind === ts.SyntaxKind.ThisKeyword) {
-        return node.name;
-      }
-      return node;
-    }
-    return ts.visitNode(root, visit);
+  if (programs.length !== 1) {
+    fatal(`Expected exactly one program extending from "${
+        RUNTIME_BASECLASS_NAME}"; found ${programs.length}`);
   }
-}
 
-/**
- * Rewrites a method to a function declaration, also collapsing references to
- * "this".
- */
-function RW_MethodToFunction<T extends ts.Node>(
-    context: ts.TransformationContext) {
-  return (root: T) => {
-    function visit(node: ts.Node): ts.Node {
-      node = ts.visitEachChild(node, visit, context);
-      if (ts.isMethodDeclaration(node) && ts.isIdentifier(node.name) &&
-          node.body !== undefined) {
-        const [body] = ts.transform(node.body, [RW_RemoveThis]).transformed;
-        if (!ts.isBlock(body)) {
-          fatal(`transformed ${body.getText()} is not a block`);
-        }
-        return context.factory.createFunctionDeclaration(
-            undefined, undefined, undefined, node.name, undefined,
-            node.parameters, node.type, body);
-      }
-      return node;
-    }
-    return ts.visitNode(root, visit);
-  }
-}
-
-type ProgramFunction = ts.FunctionDeclaration&{
-  name: ts.Identifier;
-  body: ts.Block;
-}
-
-function isNamedFunction(node: ts.Node): node is ProgramFunction {
-  return ts.isFunctionDeclaration(node) && node.name !== undefined &&
-      ts.isIdentifier(node.name) && node.body !== undefined;
+  return programs[0];
 }
 
 function isMarkedHotReload({decorators}: ts.MethodDeclaration): boolean {
@@ -126,24 +119,89 @@ function isMarkedHotReload({decorators}: ts.MethodDeclaration): boolean {
   return true;
 }
 
-export function compileNative(file: string): CppCodeGenerator {
-  const program = getRuntimeProgram(file);
+//////////////////////////////
+/// Compilation to Browser ///
+//////////////////////////////
+
+export const BRT_PROGRAM_NAME = 'πrogram';
+export type JsCode = string&{__brand: 'js code'};
+
+export interface JsCodeGenerator {
+  tsProgram: ts.Program;
+  code: JsCode;
+}
+
+export function compileBrowser(
+    absFile: string,
+    oldProgram?: ts.Program,
+    ): JsCodeGenerator {
+  const inputFiles = [absFile, RUNTIME_TS];
+  const tsProgram = createProgram(inputFiles, oldProgram);
+  const userProgram = findUserProgram(absFile, tsProgram);
+
+  const pgName = userProgram.name.text;
+  const program = [
+    fs.readFileSync(RUNTIME_TS).toString(),
+    userProgram.getText(),
+    `const ${BRT_PROGRAM_NAME} = new ${pgName}();`,
+    `${BRT_PROGRAM_NAME}.main();`,
+  ].join('\n');
+  const code = ts.transpile(program, CompilerOptions) as JsCode;
+  return {tsProgram, code};
+}
+
+/**
+ * Generates patches to make to apply new "@hotreload"-annotated method
+ * definitions to an active program in the runtime.
+ */
+export function compileBrowserPatches(
+    absFile: string, oldProgram: ts.Program): Map<string, JsCode> {
+  const inputFiles = [absFile, RUNTIME_TS];
+  const tsProgram = createProgram(inputFiles, oldProgram);
+  const userProgram = findUserProgram(absFile, tsProgram);
+
+  const patches = new Map<string, JsCode>();
+  for (const f of userProgram.members) {
+    if (!ts.isMethodDeclaration(f) || !ts.isIdentifier(f.name) ||
+        !isMarkedHotReload(f)) {
+      continue;
+    }
+    const name = f.name.text;
+    const raised = `function ${f.getText()}`.replace(`@${HOTRELOAD}`, '');
+    const transpiled = ts.transpile(raised, {
+      ...CompilerOptions,
+      strict: false,  // avoid attaching "use strict"
+    });
+
+    const patch = `${BRT_PROGRAM_NAME}.${name} = ` +
+            `(${transpiled}).bind(${BRT_PROGRAM_NAME});` as JsCode;
+    patches.set(name, patch);
+  }
+  return patches;
+}
+
+/////////////////////////////
+/// Compilation to Native ///
+/////////////////////////////
+
+export function compileNative(
+    absFile: string, oldProgram?: ts.Program): CppCodeGenerator {
+  const inputFiles = [absFile, RUNTIME_TS];
+  const tsProgram = createProgram(inputFiles, oldProgram);
+  const userProgram = findUserProgram(absFile, tsProgram);
 
   let main: ProgramFunction;
   const hotReloadFunctions: ProgramFunction[] = [];
   const staticFunctions: ProgramFunction[] = [];
 
-  for (const member of program.members) {
+  for (const member of userProgram.members) {
     if (!ts.isMethodDeclaration(member)) {
       fatal(`Cannot generate code for non-method ${
           member.name?.getText()}. To use constants, define them in a method.`);
     }
 
     const isHotReload = isMarkedHotReload(member);
-    const [fn] = ts.transform(member, [RW_MethodToFunction]).transformed;
-    if (!isNamedFunction(fn)) {
-      fatal(`transformed ${fn.getText()} is not a valid program function`);
-    }
+    const fn = transformTo(member, RW_MethodToFunction, isProgramFunction);
 
     if (fn.name && ts.isIdentifier(fn.name) && fn.name.text === 'main') {
       if (isHotReload) fatal(`"main" cannot be hot-reloaded`);
@@ -159,7 +217,12 @@ export function compileNative(file: string): CppCodeGenerator {
       new Set(hotReloadFunctions.map(fn => fn.name.text));
 
   return new CppCodeGenerator(
-      hotReloadCallNames, main!, staticFunctions, hotReloadFunctions);
+      tsProgram,
+      hotReloadCallNames,
+      main!,
+      staticFunctions,
+      hotReloadFunctions,
+  );
 }
 
 export type CppCode = string&{__brand: 'c++ code'};
@@ -200,6 +263,7 @@ export class CppCodeGenerator {
   private indent = '  ';
 
   constructor(
+      public readonly tsProgram: ts.Program,
       private readonly hotReloadCallNames: Set<string>, main: ProgramFunction,
       topLevels: ProgramFunction[], hotReloadFunctions: ProgramFunction[]) {
     this.main = this.genFunction(main);
@@ -272,10 +336,20 @@ export class CppCodeGenerator {
   }
 
   private genType(ty: ts.TypeNode): string {
-    if (ty.kind !== ts.SyntaxKind.NumberKeyword) {
-      fatal(`only "number"s are supported as types, found ${ty.getText()}`);
+    // It's better to use the TS typechecker here, but oh well.
+    switch (ty.kind) {
+      case ts.SyntaxKind.NumberKeyword:
+        return 'int';
+      case ts.SyntaxKind.TypeReference: {
+        const t = ty as ts.TypeReferenceNode;
+        if (ts.isIdentifier(t.typeName) && t.typeName.text === 'Promise' &&
+            t.typeArguments?.length === 1) {
+          return this.genType(t.typeArguments![0]);
+        }
+      }
+      default:
+        fatal(`cannot translate type "${ty.getText()}"`)
     }
-    return 'int';
   }
 
   private genStmt(stmt: ts.Statement): string {
@@ -394,6 +468,12 @@ export class CppCodeGenerator {
         const cOperand = this.genExpr(e.operand);
         return `${cOperand}${cOp}`;
       }
+      case ts.SyntaxKind.AwaitExpression: {
+        // In the C++ runtime we implement await as thread-blocking, so just
+        // unwrap the underlying expression immediately.
+        const e = expr as ts.AwaitExpression;
+        return this.genExpr(e.expression);
+      }
       default:
         fatal(`cannot translate expression "${expr.getText()}"`);
     }
@@ -412,5 +492,54 @@ export class CppCodeGenerator {
     const cInit =
         decl.initializer ? ` = ${this.genExpr(decl.initializer)}` : '';
     return `${cTy} ${cName}${cInit}`;
+  }
+}
+
+/// TS code rewriters.
+
+function transformTo<U extends ts.Node>(
+    input: ts.Node, transformer: ts.TransformerFactory<ts.Node>,
+    validator: (n: ts.Node) => n is U): U {
+  const [out] = ts.transform(input, [transformer], CompilerOptions).transformed;
+  if (!validator(out)) {
+    fatal(`transformed "${out.getText()}" is not as expected`);
+  }
+  return out;
+}
+
+/** Rewrites "this.doFoo()" -> "doFoo" */
+function RW_RemoveThis<T extends ts.Node>(context: ts.TransformationContext) {
+  return (root: T) => {
+    function visit(node: ts.Node): ts.Node {
+      node = ts.visitEachChild(node, visit, context);
+      if (ts.isPropertyAccessExpression(node) &&
+          node.expression.kind === ts.SyntaxKind.ThisKeyword) {
+        return node.name;
+      }
+      return node;
+    }
+    return ts.visitNode(root, visit);
+  }
+}
+
+/**
+ * Rewrites a method to a function declaration, also collapsing references to
+ * "this".
+ */
+function RW_MethodToFunction<T extends ts.Node>(
+    context: ts.TransformationContext) {
+  return (root: T) => {
+    function visit(node: ts.Node): ts.Node {
+      node = ts.visitEachChild(node, visit, context);
+      if (ts.isMethodDeclaration(node) && ts.isIdentifier(node.name) &&
+          node.body !== undefined) {
+        const body = transformTo(node.body, RW_RemoveThis, ts.isBlock);
+        return context.factory.createFunctionDeclaration(
+            node.decorators, node.modifiers, node.asteriskToken, node.name,
+            node.typeParameters, node.parameters, node.type, body);
+      }
+      return node;
+    }
+    return ts.visitNode(root, visit);
   }
 }

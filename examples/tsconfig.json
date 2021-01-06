@@ -1,12 +1,6 @@
 {
+  "extends": "../runtime/tsconfig.json",
   "compilerOptions": {
-    "experimentalDecorators": true,
-    "strict": true,
-    "noImplicitAny": true,
-    "noImplicitThis": true
-  },
-  "include": [
-    "./*.ts",
-    "../runtime/runtime.d.ts" // runtime library ambient defintion
-  ]
+    "noResolve": false
+  }
 }
