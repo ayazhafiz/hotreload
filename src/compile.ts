@@ -35,8 +35,19 @@ function getRuntimeProgram(file: string): ts.ClassDeclaration {
   if (!sf) fatal(`no source file for ${file}`);
 
   const sfC = sf.getChildren();
+  // I guess the TS AST looks like
+  // -- ts.SourceFile
+  //    -- ts.SyntaxList
+  //       -- ts.ClassDeclaration
+  //    -- ts.EndOfFileToken
+  // But http://ts-ast-viewer.com suggests otherwise (namely, there is no
+  // "SyntaxList") level. So let's read the first SF statement, and if it's a
+  // SyntaxList, read the first statement of that.
   const stmts =
       sfC[0].kind === ts.SyntaxKind.SyntaxList ? sfC[0].getChildren() : sfC;
+  if (stmts[stmts.length - 1].kind === ts.SyntaxKind.EndOfFileToken) {
+    stmts.pop();
+  }
   if (stmts.length !== 1) {
     fatal(`expected exactly one top level statement, found ${
         stmts.map(s => s.getText())}`);
@@ -54,6 +65,7 @@ function getRuntimeProgram(file: string): ts.ClassDeclaration {
   return cls;
 }
 
+/** Rewrites "this.doFoo()" -> "doFoo" */
 function RW_RemoveThis<T extends ts.Node>(context: ts.TransformationContext) {
   return (root: T) => {
     function visit(node: ts.Node): ts.Node {
@@ -68,6 +80,10 @@ function RW_RemoveThis<T extends ts.Node>(context: ts.TransformationContext) {
   }
 }
 
+/**
+ * Rewrites a method to a function declaration, also collapsing references to
+ * "this".
+ */
 function RW_MethodToFunction<T extends ts.Node>(
     context: ts.TransformationContext) {
   return (root: T) => {

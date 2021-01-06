@@ -36,14 +36,30 @@ struct HotReload {
   }
 
  private:
+  /// The name of the function handle to load from the "hot-reloaded" shared
+  /// object.
   const char* api;
+  /// The path to the compiled shared library containing the function code.
   const char* libpath;
+  /// The path at which to store/read the shared library.
+  /// This differs from `libpath` because when `libpath` is being recompiled, we
+  /// would like the program to still be able to use code in the shared library
+  /// without blocking.
   const char* copypath;
+  /// A lockfile that exists iff `libpath` is being compiled by the framework
+  /// runtime.
+  /// This prevents us from trying to update a stale function definition "too
+  /// soon"; i.e. when `libpath` is modified, we should not try to use it until
+  /// it is certainly compiled.
   const char* lockfile;
 
+  /// A cached handle to the shared object containing our `api`.
   void* handle = nullptr;
+  /// A cached pointer to the `api` we want to read from the shared object.
   T* loaded = nullptr;
 
+  /// Last time we loaded the shared object. Used to track modifications (i.e.
+  /// when we should reload) a shared object.
   time_t loadtime = 0;
 
   bool lockfile_exists() {
@@ -70,6 +86,11 @@ struct HotReload {
 
       copy_file(libpath, copypath);
 
+      // RTLD_NOW:   bind all references immediately. The symbol in this shared
+      //             object has been requested "right now" anyway, and there
+      //             should only be one symbol per shared object.
+      // RTLD_LOCAL: symbols in the shared object are accessible only by the
+      //             handle returned by this call to `dlopen`.
       handle = dlopen(copypath, RTLD_NOW | RTLD_LOCAL);
       if (handle == nullptr) {
         die("dlopen failed: %s\n", dlerror());
