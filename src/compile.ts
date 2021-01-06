@@ -127,8 +127,8 @@ export const BRT_PROGRAM_NAME = 'πrogram';
 export type JsCode = string&{__brand: 'js code'};
 
 export interface JsCodeGenerator {
-  tsProgram: ts.Program;
-  code: JsCode;
+  readonly tsProgram: ts.Program;
+  readonly code: JsCode;
 }
 
 export function compileBrowser(
@@ -166,6 +166,7 @@ export function compileBrowserPatches(
         !isMarkedHotReload(f)) {
       continue;
     }
+    // First, translate the method definition to a JS function.
     const name = f.name.text;
     const raised = `function ${f.getText()}`.replace(`@${HOTRELOAD}`, '');
     const transpiled = ts.transpile(raised, {
@@ -173,6 +174,8 @@ export function compileBrowserPatches(
       strict: false,  // avoid attaching "use strict"
     });
 
+    // Apply the new definition by patching it onto the runtime program:
+    //   program.doFoo = (function newDoFoo() { ... }).bind(program);
     const patch = `${BRT_PROGRAM_NAME}.${name} = ` +
             `(${transpiled}).bind(${BRT_PROGRAM_NAME});` as JsCode;
     patches.set(name, patch);
@@ -183,6 +186,39 @@ export function compileBrowserPatches(
 /////////////////////////////
 /// Compilation to Native ///
 /////////////////////////////
+
+export type CppCode = string&{__brand: 'c++ code'};
+
+export interface HotReloadFunction {
+  /** Name of the hot-reloadable function */
+  readonly name: string;
+  /**
+   * Type signature of the function. Used by the runtime to verify types have
+   * not changed between reloads.
+   */
+  readonly signature: string;
+  /**
+   * The actual function implementation to reload.
+   */
+  readonly impl: CppCode;
+  /**
+   * Given the object file, object file copy, and lockfile associated with this
+   * hot reload function, generates the top-level definition of the hot-reload
+   * function to attach to the main program.
+   *
+   * The runtime is responsible for allocating the file parameters, so this is
+   * called then.
+   */
+  readonly genTopLevelDefinition:
+      (objFile: string, objCopyFile: string, lockFile: string) => CppCode;
+}
+
+export interface CppCodeGenerator {
+  readonly tsProgram: ts.Program;
+  readonly main: CppCode;
+  readonly topLevels: CppCode[];
+  readonly hotReload: HotReloadFunction[];
+}
 
 export function compileNative(
     absFile: string, oldProgram?: ts.Program): CppCodeGenerator {
@@ -216,7 +252,7 @@ export function compileNative(
   const hotReloadCallNames =
       new Set(hotReloadFunctions.map(fn => fn.name.text));
 
-  return new CppCodeGenerator(
+  return new CppCodeGeneratorImpl(
       tsProgram,
       hotReloadCallNames,
       main!,
@@ -225,37 +261,11 @@ export function compileNative(
   );
 }
 
-export type CppCode = string&{__brand: 'c++ code'};
-
-export interface HotReloadFunction {
-  /** Name of the hot-reloadable function */
-  readonly name: string;
-  /**
-   * Type signature of the function. Used by the runtime to verify types have
-   * not changed between reloads.
-   */
-  readonly signature: string;
-  /**
-   * The actual function implementation to reload.
-   */
-  readonly impl: CppCode;
-  /**
-   * Given the object file, object file copy, and lockfile associated with this
-   * hot reload function, generates the top-level definition of the hot-reload
-   * function to attach to the main program.
-   *
-   * The runtime is responsible for allocating the file parameters, so this is
-   * called then.
-   */
-  readonly genTopLevelDefinition:
-      (objFile: string, objCopyFile: string, lockFile: string) => CppCode;
-}
-
 /**
  * Eagerly generates C++ code from an input program into a form consumable by
  * the runtime system.
  */
-export class CppCodeGenerator {
+export class CppCodeGeneratorImpl implements CppCodeGenerator {
   main: CppCode = null!;
   topLevels: CppCode[] = [];
   hotReload: HotReloadFunction[] = [];

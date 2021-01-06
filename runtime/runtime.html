@@ -16,21 +16,31 @@
       // In practice this should never be permitted, just use a bundler or
       // something.
       const exports = {};
+
       const πHOST = "<%= host %>";
       const πPORT = "<%= port %>";
       const πHR_ROUTE = `ws://${πHOST}:${πPORT}/hotreload`;
 
       let _π_reload_id = 0;
       const _π_resolve_reload = {};
-      async function πhotreload(script) {
+      // Hot-reloads some code provided in `patch`.
+      async function πhotreload(patch) {
+        // Create a script tag to contain the patch and inject into the running
+        // program.
         const s = document.createElement('script');
-        const reload_id = _π_reload_id++;
 
+        // Generate a fresh ID associated with this unique hot reload patch, and
+        // assign it an unresolved promise.
+        // After the patch has been injected into the program, it will resolve
+        // its associated promise, after which the injected script element can
+        // be removed.
+        const reload_id = _π_reload_id++;
         const wait_hotreload = new Promise((resolve) => {
           _π_resolve_reload[reload_id] = resolve;
         });
+
         s.innerHTML = [
-          script,
+          patch,
           `_π_resolve_reload[${reload_id}]();`,
         ].join('\n');
 
@@ -41,6 +51,8 @@
 
       const πrecv = new WebSocket(πHR_ROUTE);
       πrecv.onmessage = function (event) {
+        // Messages from the runtime server are always hotreload patches; apply
+        // them immediately.
         πhotreload(event.data);
       };
 

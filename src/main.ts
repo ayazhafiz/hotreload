@@ -6,8 +6,10 @@ import * as rt_browser from './runtime_browser';
 import * as rt_native from './runtime_native';
 import {die} from './util';
 
+type Backend = 'native'|'browser';
+
 interface Options {
-  backend: 'native'|'browser';
+  backend: Backend;
   file: string;
   showGenerated: boolean;
 }
@@ -41,31 +43,39 @@ function getOptions(): Options {
   };
 }
 
+type CodeGenerator<BE extends Backend> = {
+  'native': comp.CppCodeGenerator,
+  'browser': comp.JsCodeGenerator,
+}[BE];
+
+type Handler<T extends Backend> = {
+  compile(file: string): CodeGenerator<T>;
+  runtime(file: string, codegen: CodeGenerator<T>, showGenerated: boolean):
+      Promise<void|never>;
+};
+
+const Handlers: {[T in Backend]: Handler<T>} = {
+  'native': {
+    compile: comp.compileNative,
+    runtime: rt_native.start,
+  },
+  'browser': {
+    compile: comp.compileBrowser,
+    runtime: rt_browser.start,
+  },
+};
+
 async function main() {
   const {backend, file, showGenerated} = getOptions();
-  switch (backend) {
-    case 'native': {
-      let codegen: comp.CppCodeGenerator;
-      try {
-        codegen = comp.compileNative(file);
-      } catch (e) {
-        // We cannot recover if first-pass compilation failed.
-        die(e.message);
-      }
-      // The runtime will handle errors gracefully and clean up after itself.
-      return rt_native.start(file, codegen, showGenerated);
-    }
-    case 'browser': {
-      let codegen: comp.JsCodeGenerator;
-      try {
-        codegen = comp.compileBrowser(file);
-      } catch (e) {
-        // We cannot recover if first-pass compilation failed.
-        die(e.message);
-      }
-      return rt_browser.start(file, codegen, showGenerated);
-    }
+  const handle: Handler<typeof backend> = Handlers[backend];
+  let codegen: CodeGenerator<typeof backend>;
+  try {
+    codegen = handle.compile(file);
+  } catch (e) {
+    // We cannot recover if first-pass compilation failed.
+    die(e.message);
   }
+  return handle.runtime(file, codegen, showGenerated);
 }
 
 if (require.main === module) {

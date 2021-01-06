@@ -41,8 +41,7 @@ is the entry point to the framework compiler/runtime execution of a program.
 This must be run from the root of the repository! (At least until I fixup usage
 of relative paths in the framework, which will probably never happen).
 
-To run a single program, do `yarn execute <program.ts>`. For example, `yarn
-execute examples/counter.ts` runs [this example](./examples/counter.ts).
+To run a single program, do `yarn execute <program.ts>`. For example, `yarn execute examples/counter.ts` runs [this example](./examples/counter.ts).
 
 By default, the native backend is targeted. Use `yarn execute --help` to see
 other options.
@@ -65,7 +64,7 @@ class Counter extends HotReloadProgram {
   }
 
   main(): number {
-    for (let i = 0;; ++i) {
+    for (let i = 0; ; ++i) {
       let n = this.shift(this.scale(i));
       this.print(n);
       this.sleep_seconds(1);
@@ -108,22 +107,22 @@ the following:
    to C++ code admissible by the [program C++ runtime](./runtime/runtime.cpp)
 2. This generated C++ code is passed to the [framework native runtime](./src/runtime_native.ts)
    which
-     - Allocates implementation, object, and lockfiles for functions annotated
-       with `@hotreload`. These functions are compiled to shared objects and
-       read lazily, on-demand by the [program C++ runtime](./runtime/runtime.cpp).
-     - Constructs a total C++ program by prepending the program runtime to the
-       generated C++ code.
-     - Compiles the total C++ program to machine code.
-     - Executes the total program machine code.
+   - Allocates implementation, object, and lockfiles for functions annotated
+     with `@hotreload`. These functions are compiled to shared objects and
+     read lazily, on-demand by the [program C++ runtime](./runtime/runtime.cpp).
+   - Constructs a total C++ program by prepending the program runtime to the
+     generated C++ code.
+   - Compiles the total C++ program to machine code.
+   - Executes the total program machine code.
 3. The [framework native runtime](./src/runtime_native.ts) now watches the input
    program for content changes. When a change to a `@hotreload` function is
    detected, the framework runtime rewrites the C++ implementation of that
    function and recompiles the shared object associated with that function.
-     - Because this shared object is unique for each `@hotreload` function,
-       recompilation is fast and does not affect the running state of the main
-       program.
-     - If there are any compilation errors, the framework runtime backs off,
-       informs the user of errors, and continues as if nothing had changed.
+   - Because this shared object is unique for each `@hotreload` function,
+     recompilation is fast and does not affect the running state of the main
+     program.
+   - If there are any compilation errors, the framework runtime backs off,
+     informs the user of errors, and continues as if nothing had changed.
 4. The [program C++ runtime](./runtime/runtime.cpp) keeps track of modifications
    to the shared objects assocaited with `@hotreload` functions. Information on
    where these shared objects are and the functions they expose are populated
@@ -131,10 +130,10 @@ the following:
    is called by the running C++ program, the C++ runtime checks if there have
    been any changes to the associated shared object, reloads it as needed, and
    extracts the cached function handler for the call.
-     - Lazy-loading of shared objects only on calls and caching of loaded
-       function handlers prevents excessive work in the program runtime, and
-       keeps the program's behavior closer to that of what it normally would be
-       without a runtime overhead for hot code reloading.
+   - Lazy-loading of shared objects only on calls and caching of loaded
+     function handlers prevents excessive work in the program runtime, and
+     keeps the program's behavior closer to that of what it normally would be
+     without a runtime overhead for hot code reloading.
 
 Note that there is nothing very novel or tricky about this. Dynamic (runtime)
 linking is a well-known idea, the basis for pretty much every plugin
@@ -193,4 +192,126 @@ use. If this is unset, `c++` is used.
 
 ## The Browser Backend and Runtime
 
-Not yet implemented.
+As with the native backend, it's helpful to first take a look at an example:
+
+![Browser backend demo](./examples/demo_browser.gif)
+
+This is no live code reloading. The counter doesn't reset when we [change the
+code](./examples/counter.ts), but rather the implementations of `scale` and
+`shift` are hot-swapped on the fly.
+
+When targetting the browser backend, the work the framework does is similar to
+that done in the native backend, but is a bit simpler thanks to the dynamic
+nature of JavaScript. In steps:
+
+1. The input program is run through the [browser compiler](./src/compile.ts),
+   which is a thin wrapper around the TypeScript compiler that sets up the
+   framework. A JavaScript bundle injectable into a browser webpage is generated.
+2. The compiled JS code is passed to the [runtime](./src/runtime_browser.ts).
+   The runtime spins up a simple webserver serving a webpage with the user
+   program. When the webpage is requested, we simply inject the user program into
+   the [client-side runtime](./runtime/runtime.html.ts) and send it off. The
+   program begins execution on the client side immediately.
+3. The client-side runtime opens a websocket with the webserver via the
+   `/hotreload` route. Whenever there are changes to hot-reloadable code, the
+   server sends those changes as messages on this socket.
+4. The [server-side runtime](./src/runtime_browser.ts) now watches for changes
+   to the input program file. When changes are detected, the runtime requests a
+   re-analysis of the input program and generation of patches for changed
+   hot-reloadable functions from the [browser compiler](./src/compile.ts). The
+   patches are reconciled with the program state known by the server-side
+   runtime and broadcasted to all client-side runtimes that have established a
+   websocket connection.
+5. Upon receiving a hot-reload patch, the [client-side runtime](./runtime/runtime.html)
+   simply injects the new code into the browser session via a `script` tag,
+   waits for the code's evaluation by the JS engine, and deletes the `script`
+   tag once the change has been applied.
+
+This is just one way to implement hot-code reloading, and not the most ergonomic
+because it requires the usage of a particular DSL with several constraints on
+what can and cannot be reloaded. Most modern JavaScript bundlers employ a
+technique called "hot module reloading", whereby entire modules (i.e. on the
+granularity of files) are reloaded when they change. This provides for an even
+simpler runtime implementation than that presented here, since you can just load
+up a static file from the runtime server whenever something changes.
+
+### Generated JS code
+
+Like with the native backend, generated JavaScript code viewed before its
+execution by passing `--show-generated`. Running the [counter example](./examples/counter.ts)
+with the browser backend and this flag gives
+
+```javascript
+INFO:  "use strict";
+INFO:  var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+INFO:      var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+INFO:      if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+INFO:      else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target,
+key)) || r;
+INFO:      return c > 3 && r && Object.defineProperty(target, key, r), r;
+INFO:  };
+INFO:  var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+INFO:      function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+INFO:      return new (P || (P = Promise))(function (resolve, reject) {
+INFO:          function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+INFO:          function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+INFO:          function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+INFO:          step((generator = generator.apply(thisArg, _arguments || [])).next());
+INFO:      });
+INFO:  };
+INFO:  Object.defineProperty(exports, "__esModule", { value: true });
+INFO:  exports.hotreload = exports.HotReloadProgram = void 0;
+INFO:  class HotReloadProgram {
+INFO:      print(num) {
+INFO:          document.querySelector(`#app`).innerHTML = `${num}`;
+INFO:      }
+INFO:      sleep_seconds(seconds) {
+INFO:          return __awaiter(this, void 0, void 0, function* () {
+INFO:              return this.sleep_millis(seconds * 1000);
+INFO:          });
+INFO:      }
+INFO:      ;
+INFO:      sleep_millis(milli_seconds) {
+INFO:          return __awaiter(this, void 0, void 0, function* () {
+INFO:              return new Promise((resolve) => {
+INFO:                  setTimeout(() => {
+INFO:                      resolve();
+INFO:                  }, milli_seconds);
+INFO:              });
+INFO:          });
+INFO:      }
+INFO:  }
+INFO:  exports.HotReloadProgram = HotReloadProgram;
+INFO:  function hotreload(_target, _dummy_for_decorator) { }
+INFO:  exports.hotreload = hotreload;
+INFO:  ;
+INFO:  class Counter extends HotReloadProgram {
+INFO:      scale(a) {
+INFO:          return a * 1;
+INFO:      }
+INFO:      shift(a) {
+INFO:          return a + 0;
+INFO:      }
+INFO:      main() {
+INFO:          return __awaiter(this, void 0, void 0, function* () {
+INFO:              for (let i = 0;; ++i) {
+INFO:                  let n = this.shift(this.scale(i));
+INFO:                  this.print(n);
+INFO:                  yield this.sleep_seconds(1);
+INFO:              }
+INFO:          });
+INFO:      }
+INFO:  }
+INFO:  __decorate([
+INFO:      hotreload
+INFO:  ], Counter.prototype, "scale", null);
+INFO:  __decorate([
+INFO:      hotreload
+INFO:  ], Counter.prototype, "shift", null);
+INFO:  const πrogram = new Counter();
+INFO:  πrogram.main();
+```
+
+Not very interesting. It's just the TypeScript compiler's emit with two lines of
+startup code for the runtime at the bottom. Seeing how TypeScript translates
+async/await to a state machine is certainly more insightful.

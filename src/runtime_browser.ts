@@ -14,6 +14,7 @@ const port = 8000;
 app.set('views', './runtime');
 app.engine('html', require('ejs').renderFile);
 
+/** Loads the root view containing the user program. */
 app.get('/', (req, res) => {
   res.render('runtime.html', {
     host: req.hostname,
@@ -24,6 +25,10 @@ app.get('/', (req, res) => {
 
 const RegisteredRTClients: WebSocket[] = [];
 
+/**
+ * Registers a new runtime client via websocket, to whom we will forward hot
+ * patches as needed.
+ */
 app.ws('/hotreload', (ws) => {
   RegisteredRTClients.push(ws);
   ws.on('message', () => {
