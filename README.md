@@ -42,7 +42,7 @@ This must be run from the root of the repository! (At least until I fixup usage
 of relative paths in the framework, which will probably never happen).
 
 To run a single program, do `yarn execute <program.ts>`. For example, `yarn
-execute examples/math.ts` runs [this example](./examples/math.ts).
+execute examples/counter.ts` runs [this example](./examples/counter.ts).
 
 By default, the native backend is targeted. Use `yarn execute --help` to see
 other options.
@@ -50,34 +50,24 @@ other options.
 ## A summary of the framework language
 
 The framework front-end is a DSL in the TypeScript programming language; an [example
-program](./examples/math.ts) is
+program](./examples/counter.ts) is
 
 ```typescript
-class SimpleMath extends HotReloadProgram {
+class Counter extends HotReloadProgram {
   @hotreload
-  number_m(): number {
-    return 10;
+  scale(a: number): number {
+    return a * 1;
   }
 
   @hotreload
-  number_n(): number {
-    return 20;
-  }
-
-  @hotreload
-  compute(a: number, b: number): number {
-    return a + b;
-  }
-
-  computeMN(): number {
-    let m = this.number_m();
-    let n = this.number_n();
-    return this.compute(m, n);
+  shift(a: number): number {
+    return a + 0;
   }
 
   main(): number {
-    while (true) {
-      this.print(this.computeMN());
+    for (let i = 0;; ++i) {
+      let n = this.shift(this.scale(i));
+      this.print(n);
       this.sleep_seconds(1);
     }
   }
@@ -106,6 +96,10 @@ may wish to write sample programs directly in that directory.
 First, let's take a look at an example:
 
 ![Native backend demo](./examples/demo_native.gif)
+
+Clearly the running machine code is changing as we edit the source, but notice
+that the state of `i` in the counter persists -- this is no live code reloading.
+We are hot-swapping only the changed implementation on the fly.
 
 So what's happening here? When targetting the native backend, the framework does
 the following:
@@ -153,39 +147,29 @@ libraries, for which we present one approach here.
 
 Although it is generally not exposed to the user, the generated C++ code can be
 viewed before its compilation and execution by passing `--show-generated`.
-Running the [math example](./examples/math.ts) with the native backend and this
-flag gives
+Running the [counter example](./examples/counter.ts) with the native backend and
+this flag gives
 
 ```cpp
 INFO:  Generated C++ code:
-INFO:  // /private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/5ccc37c4ec7e30fe4e18c9fe36295dd1.cpp
-INFO:  extern "C" int number_m() {
-INFO:    return 10;
+INFO:  // /private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/7f828395e1611cb8b3e64ee8c7536f35.cpp
+INFO:  extern "C" int scale(int a) {
+INFO:    return a * 1;
 INFO:  }
 INFO:
-INFO:  // /private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/720cc253b119b74bc39dc0a9b4c21007.cpp
-INFO:  extern "C" int number_n() {
-INFO:    return 20;
+INFO:  // /private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/2872612167e7943ceea64b36d17c89d4.cpp
+INFO:  extern "C" int shift(int a) {
+INFO:    return a + 0;
 INFO:  }
 INFO:
-INFO:  // /private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/79a73fb38da3d020e4bbde2fcaa8b8bc.cpp
-INFO:  extern "C" int compute(int a, int b) {
-INFO:    return a + b;
-INFO:  }
-INFO:
-INFO:  // /private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/45ceba1d316a84155975fbf424558ab1.cpp
+INFO:  // /private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/fc2d242f0363b851a0b2efd6b9db7df8.cpp
 INFO:  /* <runtime snipped> */
-INFO:  HotReload<int()> number_m("number_m", "/private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/394cc1dd45c2719707b629dabb4a9ac0", "/private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/fe3f96cbb2bb7001db8a1c0e339761ff", "/private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/5190c93bd37b60f2e7b822b2bef65b01");
-INFO:  HotReload<int()> number_n("number_n", "/private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/9719c1113773c87e22ea6dd4d9b50f20", "/private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/7549a105093b5a320ffee854bfc6e239", "/private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/7817dfddd98a73ac78ad033a443c4800");
-INFO:  HotReload<int(int, int)> compute("compute", "/private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/24a8421326f62e3b845180931742fc17", "/private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/f2af23dd6e45eb90dd8b01c9a549937b", "/private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/1c9884880e691dac25282a3caa59b56c");
-INFO:  int computeMN() {
-INFO:    auto m = number_m.get()();
-INFO:    auto n = number_n.get()();
-INFO:    return compute.get()(m, n);
-INFO:  }
+INFO:  HotReload<int(int)> scale("scale", "/private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/40d1e496db6a6655b65c5d73458b6373", "/private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/2d8885948a7d8c9abf321e4f3f6912c1", "/private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/ef5a9921ce0030c42054ec3fb658b3ad");
+INFO:  HotReload<int(int)> shift("shift", "/private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/fad7d0510a897b50c8f8aec4efc8155e", "/private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/d02eecf94ddeb3592470ff6959fdcaba", "/private/var/folders/_j/4xdvs8jj5qd6nsfk8wf6jy900000gn/T/f3176b0204c187f47b4d0f1cef1a5e37");
 INFO:  int main() {
-INFO:    while (true) {
-INFO:      print(computeMN());
+INFO:    for (auto i = 0; ; ++i) {
+INFO:      auto n = shift.get()(scale.get()(i));
+INFO:      print(n);
 INFO:      sleep_seconds(1);
 INFO:    }
 INFO:  }

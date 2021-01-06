@@ -294,19 +294,7 @@ export class CppCodeGenerator {
       }
       case ts.SyntaxKind.VariableStatement: {
         const s = stmt as ts.VariableStatement;
-        if (s.declarationList.declarations.length != 1) {
-          fatal(`${
-              s.getText()} must consist of exactly one variable declaration`);
-        }
-        const [decl] = s.declarationList.declarations;
-        if (!ts.isIdentifier(decl.name)) {
-          fatal(`${decl.name.getText()} must be an identifier`);
-        }
-        const cTy = decl.type ? this.genType(decl.type) : 'auto';
-        const cName = decl.name.text;
-        const cInit =
-            decl.initializer ? ` = ${this.genExpr(decl.initializer)}` : '';
-        return `${cTy} ${cName}${cInit};`
+        return this.genVarDecls(s.declarationList).join('; ') + ';';
       }
       case ts.SyntaxKind.ReturnStatement: {
         const s = stmt as ts.ReturnStatement;
@@ -318,22 +306,44 @@ export class CppCodeGenerator {
         const cExpr = this.genExpr(s.expression);
         return `${cExpr};`;
       }
+      case ts.SyntaxKind.ForStatement: {
+        const s = stmt as ts.ForStatement;
+        let cInit: string;
+        if (s.initializer === undefined) {
+          cInit = ''
+        } else if (ts.isVariableDeclarationList(s.initializer)) {
+          cInit = this.genVarDecls(s.initializer).join(', ');
+        } else {
+          cInit = this.genExpr(s.initializer);
+        }
+        const cCond =
+            s.condition === undefined ? '' : this.genExpr(s.condition);
+        const cIncr =
+            s.incrementor === undefined ? '' : this.genExpr(s.incrementor);
+        const cStmt = this.genStmt(s.statement);
+        return `for (${cInit}; ${cCond}; ${cIncr}) ${cStmt}`;
+      }
       default:
         fatal(`cannot translate statement ${stmt.getText()}`);
     }
   }
 
-  private genBinaryOperatorMap: Map<ts.BinaryOperator, string> = new Map([
-    [ts.SyntaxKind.PlusToken, '+'],
-    [ts.SyntaxKind.MinusToken, '-'],
-    [ts.SyntaxKind.AsteriskToken, '*'],
-    [ts.SyntaxKind.SlashToken, '/'],
-  ]);
+  private genOperatorMap:
+      Map<ts.BinaryOperator|ts.PrefixUnaryOperator|ts.PostfixUnaryOperator,
+          string> =
+          new Map([
+            [ts.SyntaxKind.PlusToken, '+'],
+            [ts.SyntaxKind.PlusPlusToken, '++'],
+            [ts.SyntaxKind.MinusToken, '-'],
+            [ts.SyntaxKind.AsteriskToken, '*'],
+            [ts.SyntaxKind.SlashToken, '/'],
+          ]);
 
-  private genBinaryOperator(op: ts.BinaryOperatorToken): string {
-    const cOp = this.genBinaryOperatorMap.get(op.kind);
+  private genOperator(op: ts.BinaryOperator|ts.PrefixUnaryOperator|
+                      ts.PostfixUnaryOperator): string {
+    const cOp = this.genOperatorMap.get(op);
     if (cOp === undefined) {
-      fatal(`cannot translate binary operator ${op.getText()}`);
+      fatal(`cannot translate binary operator ${ts.SyntaxKind[op]}`);
     }
     return cOp;
   }
@@ -367,13 +377,40 @@ export class CppCodeGenerator {
       }
       case ts.SyntaxKind.BinaryExpression: {
         const e = expr as ts.BinaryExpression;
-        const cOp = this.genBinaryOperator(e.operatorToken);
+        const cOp = this.genOperator(e.operatorToken.kind);
         const cLeft = this.genExpr(e.left);
         const cRight = this.genExpr(e.right);
         return `${cLeft} ${cOp} ${cRight}`;
       }
+      case ts.SyntaxKind.PrefixUnaryExpression: {
+        const e = expr as ts.PrefixUnaryExpression;
+        const cOp = this.genOperator(e.operator);
+        const cOperand = this.genExpr(e.operand);
+        return `${cOp}${cOperand}`;
+      }
+      case ts.SyntaxKind.PostfixUnaryExpression: {
+        const e = expr as ts.PostfixUnaryExpression;
+        const cOp = this.genOperator(e.operator);
+        const cOperand = this.genExpr(e.operand);
+        return `${cOperand}${cOp}`;
+      }
       default:
         fatal(`cannot translate expression "${expr.getText()}"`);
     }
+  }
+
+  private genVarDecls(varDecls: ts.VariableDeclarationList): string[] {
+    return varDecls.declarations.map(d => this.genVarDecl(d));
+  }
+
+  private genVarDecl(decl: ts.VariableDeclaration): string {
+    if (!ts.isIdentifier(decl.name)) {
+      fatal(`${decl.name.getText()} must be an identifier`);
+    }
+    const cName = decl.name.text;
+    const cTy = decl.type ? this.genType(decl.type) : 'auto';
+    const cInit =
+        decl.initializer ? ` = ${this.genExpr(decl.initializer)}` : '';
+    return `${cTy} ${cName}${cInit}`;
   }
 }
