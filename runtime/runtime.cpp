@@ -30,6 +30,8 @@ struct HotReload {
             const char* lockfile)
       : api(api), libpath(libpath), copypath(copypath), lockfile(lockfile) {}
 
+  ~HotReload() { dlclose(handle); }
+
   T* get() {
     assure_loaded();
     return loaded;
