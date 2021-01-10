@@ -4,6 +4,9 @@ This is a small framework for program execution with support for [hot code reloa
 There are two backends - one that compiles and runs machine code, and one that
 runs JavaScript in a browser.
 
+See [this blog post](https://ayazhafiz.com/articles/21/hot-code-reloading) for a
+quick run-through of how it all works.
+
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
